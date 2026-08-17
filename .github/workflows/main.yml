@@ -7,30 +7,34 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 concurrency:
-  group: iptv-live-stream
-  cancel-in-progress: true
+  group: iptv-live
+  cancel-in-progress: false
 
 jobs:
+
   stream:
     runs-on: self-hosted
 
     steps:
 
-      # =========================================================
-      # 1. تحميل المشروع
-      # =========================================================
-      - name: Checkout repository
+      # ==========================================================
+      # 1 — Checkout
+      # ==========================================================
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 1
 
-      # =========================================================
-      # 2. تثبيت FFmpeg والأدوات
-      # =========================================================
-      - name: Install System Packages
+
+      # ==========================================================
+      # 2 — Install FFmpeg
+      # ==========================================================
+      - name: Install packages
         run: |
           export DEBIAN_FRONTEND=noninteractive
 
@@ -42,23 +46,23 @@ jobs:
 
           $SUDO apt-get update -y -qq || true
 
-          $SUDO apt-get install -y -f --no-install-recommends \
+          $SUDO apt-get install -y \
             ffmpeg \
-            git \
-            rsync \
             python3 \
+            git \
             curl \
+            rsync \
             procps \
-            net-tools \
             || true
 
-          echo "FFmpeg version:"
+          echo "FFmpeg:"
           ffmpeg -version | head -n 1
 
-      # =========================================================
-      # 3. قائمة القنوات
-      # =========================================================
-      - name: Create Channel List
+
+      # ==========================================================
+      # 3 — Channels
+      # ==========================================================
+      - name: Create channels
         run: |
           cat > channels.txt <<'EOF'
           bein-news|http://xlion.net:8080/live/15034094901029/18800196589372/443146.ts
@@ -86,161 +90,89 @@ jobs:
           national-geographic|http://xlion.net:8080/live/15034094901029/18800196589372/15026.ts
           EOF
 
-      # =========================================================
-      # 4. إنشاء HLS
-      # =========================================================
-      - name: Prepare HLS
-        run: |
-          mkdir -p hls
 
-          while IFS='|' read -r NAME URL; do
+      # ==========================================================
+      # 4 — Create public folder
+      # ==========================================================
+      - name: Prepare HLS directory
+        run: |
+
+          rm -rf public
+          mkdir -p public
+
+          while IFS='|' read -r NAME URL
+          do
+
             [ -z "$NAME" ] && continue
 
-            mkdir -p "hls/$NAME"
-
-            rm -f "hls/$NAME/"*.ts
-            rm -f "hls/$NAME/index.m3u8"
+            mkdir -p "public/$NAME"
 
           done < channels.txt
 
-      # =========================================================
-      # 5. إنشاء index.m3u الخاص بـ GitHub
-      # =========================================================
-      - name: Generate GitHub M3U Playlist
+
+      # ==========================================================
+      # 5 — Create M3U
+      # ==========================================================
+      - name: Generate M3U
         run: |
-          cat > index.m3u <<'EOF'
+
+          cat > public/index.m3u <<EOF
           #EXTM3U
           EOF
 
-          while IFS='|' read -r NAME URL; do
+          while IFS='|' read -r NAME URL
+          do
+
             [ -z "$NAME" ] && continue
 
             TITLE=$(echo "$NAME" | sed 's/-/ /g')
 
-            cat >> index.m3u <<EOF
+            cat >> public/index.m3u <<EOF
           #EXTINF:-1,$TITLE
-          https://raw.githubusercontent.com/${{ github.repository }}/main/hls/$NAME/index.m3u8
+          ./$(echo "$NAME")/index.m3u8
           EOF
 
           done < channels.txt
 
-          cp index.m3u hls/index.m3u
 
-          echo "================================="
-          echo "GitHub M3U:"
-          echo "https://raw.githubusercontent.com/${{ github.repository }}/main/index.m3u"
-          echo "================================="
+      # ==========================================================
+      # 6 — GitHub Pages deploy
+      # ==========================================================
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./public
 
-      # =========================================================
-      # 6. رفع index.m3u إلى GitHub
-      # =========================================================
-      - name: Push M3U to GitHub
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add index.m3u
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
 
-          git diff --cached --quiet || \
-            git commit -m "Update IPTV playlist [skip ci]"
 
-          git push origin main || true
-
-      # =========================================================
-      # 7. تشغيل HTTP Server داخلي
-      # =========================================================
-      - name: Start Local HLS Server
-        run: |
-          cat > server.py <<'PYEOF'
-          import http.server
-          import socketserver
-          import os
-
-          PORT = 8080
-
-          class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
-
-              def end_headers(self):
-                  self.send_header(
-                      "Access-Control-Allow-Origin",
-                      "*"
-                  )
-
-                  self.send_header(
-                      "Cache-Control",
-                      "no-cache, no-store, must-revalidate"
-                  )
-
-                  self.send_header(
-                      "Pragma",
-                      "no-cache"
-                  )
-
-                  self.send_header(
-                      "Expires",
-                      "0"
-                  )
-
-                  super().end_headers()
-
-          os.chdir("hls")
-
-          class ReusableTCPServer(
-              socketserver.ThreadingTCPServer
-          ):
-              allow_reuse_address = True
-
-          with ReusableTCPServer(
-              ("127.0.0.1", PORT),
-              NoCacheHandler
-          ) as httpd:
-
-              print(
-                  f"HLS server running on http://127.0.0.1:{PORT}"
-              )
-
-              httpd.serve_forever()
-          PYEOF
-
-          # إيقاف أي نسخة قديمة
-          pkill -f "python3 server.py" || true
-
-          sleep 1
-
-          python3 server.py > server.log 2>&1 &
-
-          sleep 2
-
-          echo "HLS server started."
-
-      # =========================================================
-      # 8. تشغيل جميع القنوات
-      # =========================================================
-      - name: Start Continuous FFmpeg Streaming
+      # ==========================================================
+      # 7 — Start FFmpeg
+      # ==========================================================
+      - name: Start HLS streams
         run: |
 
-          # تنظيف FFmpeg قديم
-          pkill -f "ffmpeg.*hls" || true
+          echo "Starting all HLS channels..."
 
-          sleep 2
-
-          while IFS='|' read -r NAME URL; do
+          while IFS='|' read -r NAME URL
+          do
 
             [ -z "$NAME" ] && continue
 
-            echo "=========================================="
-            echo "Starting channel: $NAME"
-            echo "Source: $URL"
-            echo "=========================================="
+            echo "Starting: $NAME"
 
             (
-              while true; do
+              while true
+              do
 
-                echo "[$NAME] Starting FFmpeg..."
+                echo "[$NAME] FFmpeg starting..."
 
-                rm -f "hls/$NAME/index.m3u8"
+                mkdir -p "public/$NAME"
+
+                rm -f "public/$NAME/index.m3u8"
 
                 ffmpeg \
                   -hide_banner \
@@ -264,13 +196,12 @@ jobs:
                   -hls_list_size 6 \
                   -hls_delete_threshold 2 \
                   -hls_flags delete_segments+append_list+omit_endlist \
-                  -hls_segment_filename "hls/$NAME/segment_%03d.ts" \
-                  "hls/$NAME/index.m3u8"
+                  -hls_segment_filename "public/$NAME/segment_%03d.ts" \
+                  "public/$NAME/index.m3u8"
 
-                EXIT_CODE=$?
+                CODE=$?
 
-                echo "[$NAME] FFmpeg stopped with code: $EXIT_CODE"
-                echo "[$NAME] Restarting in 2 seconds..."
+                echo "[$NAME] FFmpeg stopped: $CODE"
 
                 sleep 2
 
@@ -280,36 +211,19 @@ jobs:
 
           done < channels.txt
 
-          echo ""
-          echo "=========================================="
-          echo "ALL CHANNELS STARTED"
-          echo "=========================================="
-          echo ""
-          echo "GitHub M3U:"
-          echo "https://raw.githubusercontent.com/${{ github.repository }}/main/index.m3u"
-          echo ""
 
-          # 5 ساعات و30 دقيقة
+          echo ""
+          echo "=============================================="
+          echo "ALL STREAMS STARTED"
+          echo "=============================================="
+
           sleep 19800
 
-          echo "Stopping all streams..."
 
-          pkill -f ffmpeg || true
-          pkill -f "python3 server.py" || true
-
-      # =========================================================
-      # 9. إظهار السجلات في حالة الخطأ
-      # =========================================================
-      - name: Show Server Logs
+      # ==========================================================
+      # 8 — Stop
+      # ==========================================================
+      - name: Stop streams
         if: always()
         run: |
-          echo "========== SERVER LOG =========="
-          cat server.log 2>/dev/null || true
-
-          echo ""
-          echo "========== RUNNING PROCESSES =========="
-          ps aux | grep -E "ffmpeg|server.py" | grep -v grep || true
-
-          echo ""
-          echo "========== PORT 8080 =========="
-          ss -ltnp 2>/dev/null | grep :8080 || true
+          pkill -f ffmpeg || true
