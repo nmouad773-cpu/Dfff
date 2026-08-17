@@ -12,39 +12,16 @@ jobs:
     steps:
       - name: Install FFmpeg
         run: |
-          if command -v sudo >/dev/null 2>&1; then
-            sudo apt-get update && sudo apt-get install -y ffmpeg
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            export DEBIAN_FRONTEND=noninteractive
+            if command -v sudo >/dev/null 2>&1; then
+              sudo apt-get update && sudo apt-get install -y --fix-missing ffmpeg
+            else
+              apt-get update && apt-get install -y --fix-missing ffmpeg
+            fi
           else
-            apt-get update && apt-get install -y ffmpeg
+            echo "FFmpeg is already installed."
           fi
-
-      - name: Create HLS directories
-        run: |
-          mkdir -p hls
-
-          mkdir -p hls/bein-news
-          mkdir -p hls/bein-1
-          mkdir -p hls/bein-2
-          mkdir -p hls/bein-3
-          mkdir -p hls/bein-4
-          mkdir -p hls/bein-5
-          mkdir -p hls/bein-6
-          mkdir -p hls/bein-7
-          mkdir -p hls/bein-8
-          mkdir -p hls/bein-movies-1
-          mkdir -p hls/bein-movies-2
-          mkdir -p hls/al-thamanya-1
-          mkdir -p hls/al-thamanya-2
-          mkdir -p hls/al-thamanya-3
-          mkdir -p hls/mbc-2
-          mkdir -p hls/mbc-3
-          mkdir -p hls/mbc-4
-          mkdir -p hls/mbc-5
-          mkdir -p hls/al-aoula
-          mkdir -p hls/2m-maroc
-          mkdir -p hls/arryadia-hd
-          mkdir -p hls/quran-karim
-          mkdir -p hls/national-geographic
 
       - name: Create channel list
         run: |
@@ -73,6 +50,16 @@ jobs:
           quran-karim|http://xlion.net:8080/live/15034094901029/18800196589372/413749.ts
           national-geographic|http://xlion.net:8080/live/15034094901029/18800196589372/15026.ts
           EOF
+
+      - name: Create HLS directories
+        run: |
+          mkdir -p hls
+          if [ -f channels.txt ]; then
+            while IFS='|' read -r NAME URL
+            do
+              mkdir -p "hls/$NAME"
+            done < channels.txt
+          fi
 
       - name: Start HLS streams
         run: |
@@ -119,16 +106,17 @@ jobs:
           #EXTM3U
           EOF
 
-          while IFS='|' read -r NAME URL
-          do
-            TITLE=$(echo "$NAME" | sed 's/-/ /g')
+          if [ -f channels.txt ]; then
+            while IFS='|' read -r NAME URL
+            do
+              TITLE=$(echo "$NAME" | sed 's/-/ /g')
 
-            cat >> hls/index.m3u <<EOF
+              cat >> hls/index.m3u <<EOF
           #EXTINF:-1,$TITLE
           $NAME/index.m3u8
           EOF
-
-          done < channels.txt
+            done < channels.txt
+          fi
 
       - name: Upload HLS files
         if: always()
