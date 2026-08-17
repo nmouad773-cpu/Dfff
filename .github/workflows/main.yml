@@ -1,4 +1,4 @@
-name: IPTV HLS Restreaming Pro
+name: IPTV Live HLS Streamer Pro
 
 on:
   workflow_dispatch:
@@ -15,8 +15,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: main
 
-      - name: Check and Install Required Packages
+      - name: Install System Packages & Cloudflared
         run: |
           export DEBIAN_FRONTEND=noninteractive
           
@@ -26,14 +28,16 @@ jobs:
             SUDO=""
           fi
 
-          if command -v ffmpeg >/dev/null 2>&1 && command -v git >/dev/null 2>&1 && command -v rsync >/dev/null 2>&1; then
-            echo "جميع الأدوات مثبتة ومجهزة!"
-          else
-            $SUDO rm -f /var/log/apt/eipp.log.xz /var/lib/dpkg/lock* /var/lib/apt/lists/lock || true
-            $SUDO dpkg --configure -a || true
-            $SUDO apt-get clean || true
-            $SUDO apt-get update -y -qq || true
-            $SUDO apt-get install -y -f --no-install-recommends ffmpeg git rsync || true
+          # تثبيت الأدوات الأساسية
+          $SUDO apt-get update -y -qq || true
+          $SUDO apt-get install -y -f --no-install-recommends ffmpeg git rsync python3 curl || true
+
+          # تثبيت Cloudflared للبث المباشر بدون كاش
+          if ! command -v cloudflared >/dev/null 2>&1; then
+            echo "جاري تثبيت Cloudflared..."
+            curl -L -o cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+            $SUDO dpkg -i cloudflared.deb || $SUDO apt-get install -f -y
+            rm -f cloudflared.deb
           fi
 
       - name: Create Channel List
@@ -64,51 +68,89 @@ jobs:
           national-geographic|http://xlion.net:8080/live/15034094901029/18800196589372/15026.ts
           EOF
 
-      - name: Start Continuous Streaming & Force Sync
+      - name: Start Live Web Server & Tunnel
+        run: |
+          mkdir -p hls
+
+          # إنشاء خادم ويب بلغة بايثون يمنع الكاش ويسمح بـ CORS
+          cat << 'PYEOF' > server.py
+          import http.server, socketserver, os
+
+          class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
+              def end_headers(self):
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+                  self.send_header('Pragma', 'no-cache')
+                  self.send_header('Expires', '0')
+                  super().end_headers()
+
+          os.chdir('hls')
+          with socketserver.TCPServer(("", 8080), NoCacheHandler) as httpd:
+              httpd.serve_forever()
+          PYEOF
+
+          python3 server.py &
+
+          # تشغيل Cloudflare Tunnel للحصول على رابط مباشر بدون كاش
+          pkill -f cloudflared || true
+          cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
+
+          echo "في انتظار توليد رابط البث المباشر..."
+          sleep 8
+
+          TUNNEL_URL=""
+          for i in {1..15}; do
+            TUNNEL_URL=$(grep -o 'https://[-a-zA-Z0-9.]*\.trycloudflare\.com' tunnel.log | head -n 1 || true)
+            if [ -n "$TUNNEL_URL" ]; then
+              break
+            fi
+            sleep 2
+          done
+
+          echo "TUNNEL_URL=$TUNNEL_URL" >> $GITHUB_ENV
+          echo "Live Stream Base Domain: $TUNNEL_URL"
+
+      - name: Generate M3U Playlist & Push to Main Branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
-          mkdir -p hls
-          GH_PAGES_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
-
-          # إنشاء ملف التشغيل الرئيسي index.m3u
-          cat > hls/index.m3u <<'EOF'
+          # إنشاء ملف index.m3u الرئيسي للتشغيل
+          cat > index.m3u <<'EOF'
           #EXTM3U
           EOF
 
           while IFS='|' read -r NAME URL; do
             mkdir -p "hls/$NAME"
             TITLE=$(echo "$NAME" | sed 's/-/ /g')
-            cat >> hls/index.m3u <<EOF
+            cat >> index.m3u <<EOF
           #EXTINF:-1,$TITLE
-          $GH_PAGES_URL/hls/$NAME/index.m3u8
+          ${{ env.TUNNEL_URL }}/$NAME/index.m3u8
           EOF
           done < channels.txt
 
-          # حلقة المزامنة السريعة: ترفع فقط آخر لقطات البث وبشكل Force لمنع تضخم المستودع
-          (
-            while true; do
-              sleep 6
-              if [ -d "hls" ]; then
-                rm -rf deploy_tmp
-                mkdir -p deploy_tmp
-                cp -r hls deploy_tmp/
-                cd deploy_tmp
-                git init
-                git checkout --orphan gh-pages
-                git add -A
-                git commit -m "Live Sync" || true
-                git push --force "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" gh-pages >/dev/null 2>&1 || true
-                cd ..
-                rm -rf deploy_tmp
-              fi
-            done
-          ) &
+          # نسخ الملف إلى مجلد البث المباشر أيضاً
+          cp index.m3u hls/index.m3u
 
-          # تشغيل البث عبر FFmpeg مع إعادة الاتصال التلقائي وتثبيت شريحة البث
+          # رفعه فوراً إلى الفرع الرئيسي main
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.m3u
+          git commit -m "Update live M3U playlist file [skip ci]" || true
+          git push origin main || true
+
+          # طباعة ملخص الرابط في واجهة GitHub Actions
+          RAW_M3U_URL="https://raw.githubusercontent.com/${{ github.repository }}/main/index.m3u"
+          TUNNEL_M3U_URL="${{ env.TUNNEL_URL }}/index.m3u"
+
+          echo "### 🚀 رابط قائمة القنوات جاهز للبث المباشر" >> $GITHUB_STEP_SUMMARY
+          echo "**1. رابط تحميل/تشغيل الملف من GitHub الرئيسي (Raw):**" >> $GITHUB_STEP_SUMMARY
+          echo "\`$RAW_M3U_URL\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**2. رابط التشغيل المباشر والسريع جداً (Cloudflare):**" >> $GITHUB_STEP_SUMMARY
+          echo "\`$TUNNEL_M3U_URL\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Start Continuous FFmpeg Streaming
+        run: |
           while IFS='|' read -r NAME URL; do
             echo "Starting stream for: $NAME"
 
@@ -139,7 +181,9 @@ jobs:
 
           done < channels.txt
 
-          echo "Streaming is live..."
+          echo "All channels are streaming live..."
           sleep 19800
 
           pkill -f ffmpeg || true
+          pkill -f python3 || true
+          pkill -f cloudflared || true
