@@ -61,6 +61,25 @@ jobs:
             done < channels.txt
           fi
 
+      - name: Create master M3U
+        run: |
+          mkdir -p hls
+          cat > hls/index.m3u <<'EOF'
+          #EXTM3U
+          EOF
+
+          if [ -f channels.txt ]; then
+            while IFS='|' read -r NAME URL
+            do
+              TITLE=$(echo "$NAME" | sed 's/-/ /g')
+
+              cat >> hls/index.m3u <<EOF
+          #EXTINF:-1,$TITLE
+          $NAME/index.m3u8
+          EOF
+            done < channels.txt
+          fi
+
       - name: Start HLS streams
         run: |
           while IFS='|' read -r NAME URL
@@ -96,27 +115,11 @@ jobs:
 
           done < channels.txt
 
-          wait
+          echo "Streams started in background. Running for 5.5 hours..."
+          sleep 19800
 
-      - name: Create master M3U
-        if: always()
-        run: |
-          mkdir -p hls
-          cat > hls/index.m3u <<'EOF'
-          #EXTM3U
-          EOF
-
-          if [ -f channels.txt ]; then
-            while IFS='|' read -r NAME URL
-            do
-              TITLE=$(echo "$NAME" | sed 's/-/ /g')
-
-              cat >> hls/index.m3u <<EOF
-          #EXTINF:-1,$TITLE
-          $NAME/index.m3u8
-          EOF
-            done < channels.txt
-          fi
+          echo "Stopping streams..."
+          pkill -f ffmpeg || true
 
       - name: Upload HLS files
         if: always()
