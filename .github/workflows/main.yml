@@ -16,27 +16,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Fix APT Permissions & Install Packages
+      - name: Check and Install Required Packages
         run: |
           export DEBIAN_FRONTEND=noninteractive
           
-          # التحقق من وجود sudo أو التشغيل كـ root مباشرة
           if command -v sudo >/dev/null 2>&1; then
             SUDO="sudo"
           else
             SUDO=""
           fi
-          
-          # تنظيف ملفات القفل والقوائم المعلقة
-          $SUDO rm -f /var/log/apt/eipp.log.xz || true
-          $SUDO rm -f /var/lib/dpkg/lock* || true
-          $SUDO rm -f /var/lib/apt/lists/lock || true
-          
-          # إصلاح حزم dpkg والتثبيت
-          $SUDO dpkg --configure -a || true
-          $SUDO apt-get clean
-          $SUDO apt-get update -y
-          $SUDO apt-get install -y --fix-broken --fix-missing ffmpeg git rsync
+
+          # التحقق مما إذا كانت جميع الأدوات مثبتة مسبقاً
+          if command -v ffmpeg >/dev/null 2>&1 && command -v git >/dev/null 2>&1 && command -v rsync >/dev/null 2>&1; then
+            echo "جميع الأدوات (FFmpeg, Git, Rsync) مثبتة ومجهزة بالفعل!"
+          else
+            echo "جاري إصلاح APT وتثبيت الأدوات الناقصة..."
+            $SUDO rm -f /var/log/apt/eipp.log.xz /var/lib/dpkg/lock* /var/lib/apt/lists/lock || true
+            $SUDO dpkg --configure -a || true
+            $SUDO apt-get clean || true
+            $SUDO apt-get update -y -qq || true
+            $SUDO apt-get install -y -f --no-install-recommends ffmpeg git rsync || true
+          fi
 
       - name: Create channel list
         run: |
