@@ -1,4 +1,4 @@
-Name: IPTV HLS Restream
+name: IPTV HLS Restream
 
 on:
   workflow_dispatch:
