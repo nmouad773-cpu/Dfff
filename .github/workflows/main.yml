@@ -7,8 +7,7 @@ on:
 
 jobs:
   stream:
-    runs-on: ubuntu-latest
-    timeout-minutes: 350
+    runs-on: self-hosted
 
     steps:
       - name: Install FFmpeg
@@ -47,29 +46,29 @@ jobs:
       - name: Create channel list
         run: |
           cat > channels.txt <<'EOF'
-          bein-news|http://xlion.net:8080//15034094901029/18800196589372/443146
-          bein-1|http://xlion.net:8080//15034094901029/18800196589372/325793
-          bein-2|http://xlion.net:8080//15034094901029/18800196589372/325794
-          bein-3|http://xlion.net:8080//15034094901029/18800196589372/325795
-          bein-4|http://xlion.net:8080//15034094901029/18800196589372/325796
-          bein-5|http://xlion.net:8080//15034094901029/18800196589372/325797
-          bein-6|http://xlion.net:8080//15034094901029/18800196589372/325798
-          bein-7|http://xlion.net:8080//15034094901029/18800196589372/325799
-          bein-8|http://xlion.net:8080//15034094901029/18800196589372/325800
-          bein-movies-1|http://xlion.net:8080//15034094901029/18800196589372/319672
-          bein-movies-2|http://xlion.net:8080//15034094901029/18800196589372/319673
-          al-thamanya-1|http://xlion.net:8080//15034094901029/18800196589372/429516
-          al-thamanya-2|http://xlion.net:8080//15034094901029/18800196589372/429517
-          al-thamanya-3|http://xlion.net:8080//15034094901029/18800196589372/429518
-          mbc-2|http://xlion.net:8080//15034094901029/18800196589372/45168
-          mbc-3|http://xlion.net:8080//15034094901029/18800196589372/45143
-          mbc-4|http://xlion.net:8080//15034094901029/18800196589372/45164
-          mbc-5|http://xlion.net:8080//15034094901029/18800196589372/92759
-          al-aoula|http://xlion.net:8080//15034094901029/18800196589372/414017
-          2m-maroc|http://xlion.net:8080//15034094901029/18800196589372/413999
-          arryadia-hd|http://pro.netmos.ovh:7355//UDJPRCRA1L055B/Ep27yiiwbb56mjkl/187244
-          quran-karim|http://xlion.net:8080//15034094901029/18800196589372/413749
-          national-geographic|http://xlion.net:8080//15034094901029/18800196589372/15026
+          bein-news|http://xlion.net:8080/live/15034094901029/18800196589372/443146.ts
+          bein-1|http://xlion.net:8080/live/15034094901029/18800196589372/325793.ts
+          bein-2|http://xlion.net:8080/live/15034094901029/18800196589372/325794.ts
+          bein-3|http://xlion.net:8080/live/15034094901029/18800196589372/325795.ts
+          bein-4|http://xlion.net:8080/live/15034094901029/18800196589372/325796.ts
+          bein-5|http://xlion.net:8080/live/15034094901029/18800196589372/325797.ts
+          bein-6|http://xlion.net:8080/live/15034094901029/18800196589372/325798.ts
+          bein-7|http://xlion.net:8080/live/15034094901029/18800196589372/325799.ts
+          bein-8|http://xlion.net:8080/live/15034094901029/18800196589372/325800.ts
+          bein-movies-1|http://xlion.net:8080/live/15034094901029/18800196589372/319672.ts
+          bein-movies-2|http://xlion.net:8080/live/15034094901029/18800196589372/319673.ts
+          al-thamanya-1|http://xlion.net:8080/live/15034094901029/18800196589372/429516.ts
+          al-thamanya-2|http://xlion.net:8080/live/15034094901029/18800196589372/429517.ts
+          al-thamanya-3|http://xlion.net:8080/live/15034094901029/18800196589372/429518.ts
+          mbc-2|http://xlion.net:8080/live/15034094901029/18800196589372/45168.ts
+          mbc-3|http://xlion.net:8080/live/15034094901029/18800196589372/45143.ts
+          mbc-4|http://xlion.net:8080/live/15034094901029/18800196589372/45164.ts
+          mbc-5|http://xlion.net:8080/live/15034094901029/18800196589372/92759.ts
+          al-aoula|http://xlion.net:8080/live/15034094901029/18800196589372/414017.ts
+          2m-maroc|http://xlion.net:8080/live/15034094901029/18800196589372/413999.ts
+          arryadia-hd|http://pro.netmos.ovh:7355/live/UDJPRCRA1L055B/Ep27yiiwbb56mjkl/187244.ts
+          quran-karim|http://xlion.net:8080/live/15034094901029/18800196589372/413749.ts
+          national-geographic|http://xlion.net:8080/live/15034094901029/18800196589372/15026.ts
           EOF
 
       - name: Start HLS streams
