@@ -12,8 +12,11 @@ jobs:
     steps:
       - name: Install FFmpeg
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          if command -v sudo >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y ffmpeg
+          else
+            apt-get update && apt-get install -y ffmpeg
+          fi
 
       - name: Create HLS directories
         run: |
