@@ -1,4 +1,4 @@
-name: IPTV HLS Restream
+name: IPTV HLS Restreaming Pro
 
 on:
   workflow_dispatch:
@@ -15,8 +15,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          ref: main
 
       - name: Check and Install Required Packages
         run: |
@@ -29,9 +27,8 @@ jobs:
           fi
 
           if command -v ffmpeg >/dev/null 2>&1 && command -v git >/dev/null 2>&1 && command -v rsync >/dev/null 2>&1; then
-            echo "جميع الأدوات (FFmpeg, Git, Rsync) مثبتة ومجهزة بالفعل!"
+            echo "جميع الأدوات مثبتة ومجهزة!"
           else
-            echo "جاري إصلاح APT وتثبيت الأدوات الناقصة..."
             $SUDO rm -f /var/log/apt/eipp.log.xz /var/lib/dpkg/lock* /var/lib/apt/lists/lock || true
             $SUDO dpkg --configure -a || true
             $SUDO apt-get clean || true
@@ -39,7 +36,7 @@ jobs:
             $SUDO apt-get install -y -f --no-install-recommends ffmpeg git rsync || true
           fi
 
-      - name: Create channel list
+      - name: Create Channel List
         run: |
           cat > channels.txt <<'EOF'
           bein-news|http://xlion.net:8080/live/15034094901029/18800196589372/443146.ts
@@ -67,93 +64,82 @@ jobs:
           national-geographic|http://xlion.net:8080/live/15034094901029/18800196589372/15026.ts
           EOF
 
-      - name: Create Master M3U and Push Directly to Main Branch
+      - name: Start Continuous Streaming & Force Sync
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
           mkdir -p hls
-          BASE_URL="https://raw.githubusercontent.com/${{ github.repository }}/main/hls"
-          
-          # إنشاء ملف index.m3u الرئيسي
-          cat > index.m3u <<'EOF'
+          GH_PAGES_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+
+          # إنشاء ملف التشغيل الرئيسي index.m3u
+          cat > hls/index.m3u <<'EOF'
           #EXTM3U
           EOF
 
-          while IFS='|' read -r NAME URL
-          do
+          while IFS='|' read -r NAME URL; do
             mkdir -p "hls/$NAME"
             TITLE=$(echo "$NAME" | sed 's/-/ /g')
-            cat >> index.m3u <<EOF
+            cat >> hls/index.m3u <<EOF
           #EXTINF:-1,$TITLE
-          $BASE_URL/$NAME/index.m3u8
+          $GH_PAGES_URL/hls/$NAME/index.m3u8
           EOF
           done < channels.txt
 
-          # رفع ملف index.m3u فوراً إلى الواجهة الرئيسية (Main Branch)
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add index.m3u
-          git commit -m "Update index.m3u in main branch [skip ci]" || true
-          git push origin main || true
-
-          echo "======================================================="
-          echo "تم رفع الملف بنجاح إلى الواجهة الرئيسية!"
-          echo "رابط الملف المباشر (Raw):"
-          echo "https://raw.githubusercontent.com/${{ github.repository }}/main/index.m3u"
-          echo "======================================================="
-
-      - name: Start Continuous Sync to Main & HLS Stream
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # حلقة خلفية لمزامنة مقاطع البث الحية مع الواجهة الرئيسية كل 15 ثانية
+          # حلقة المزامنة السريعة: ترفع فقط آخر لقطات البث وبشكل Force لمنع تضخم المستودع
           (
             while true; do
-              sleep 15
+              sleep 6
               if [ -d "hls" ]; then
-                git add hls/
-                if ! git diff --staged --quiet; then
-                  git commit -m "Auto sync live HLS segments [skip ci]" || true
-                  git push origin main >/dev/null 2>&1 || true
-                fi
+                rm -rf deploy_tmp
+                mkdir -p deploy_tmp
+                cp -r hls deploy_tmp/
+                cd deploy_tmp
+                git init
+                git checkout --orphan gh-pages
+                git add -A
+                git commit -m "Live Sync" || true
+                git push --force "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" gh-pages >/dev/null 2>&1 || true
+                cd ..
+                rm -rf deploy_tmp
               fi
             done
           ) &
 
-          while IFS='|' read -r NAME URL
-          do
-            echo "Starting $NAME"
+          # تشغيل البث عبر FFmpeg مع إعادة الاتصال التلقائي وتثبيت شريحة البث
+          while IFS='|' read -r NAME URL; do
+            echo "Starting stream for: $NAME"
 
             (
-              while true
-              do
+              while true; do
                 ffmpeg \
                   -hide_banner \
                   -loglevel warning \
-                  -re \
-                  -err_detect ignore_err \
-                  -fflags +genpts+discardcorrupt \
+                  -reconnect 1 \
+                  -reconnect_streamed 1 \
+                  -reconnect_delay_max 5 \
                   -rw_timeout 10000000 \
                   -i "$URL" \
-                  -map 0:v:0 \
+                  -map 0:v:0? \
                   -map 0:a:0? \
-                  -c:v copy \
-                  -c:a copy \
+                  -c copy \
                   -f hls \
-                  -hls_time 4 \
-                  -hls_list_size 5 \
-                  -hls_flags delete_segments+append_list+independent_segments \
-                  -hls_segment_filename "hls/$NAME/segment_%06d.ts" \
+                  -hls_time 3 \
+                  -hls_list_size 6 \
+                  -hls_flags delete_segments+append_list+omit_endlist \
+                  -hls_segment_filename "hls/$NAME/segment_%03d.ts" \
                   "hls/$NAME/index.m3u8"
 
-                echo "$NAME stopped, restarting..."
-                sleep 3
+                echo "Stream $NAME lost connection, auto-restarting..."
+                sleep 2
               done
             ) &
 
           done < channels.txt
 
-          echo "Streaming and updating main branch..."
+          echo "Streaming is live..."
           sleep 19800
 
           pkill -f ffmpeg || true
