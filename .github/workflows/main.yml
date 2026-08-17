@@ -10,17 +10,15 @@ jobs:
     runs-on: self-hosted
 
     steps:
-      - name: Install FFmpeg
+      - name: Install FFmpeg & Python
         run: |
-          if ! command -v ffmpeg >/dev/null 2>&1; then
+          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
             export DEBIAN_FRONTEND=noninteractive
             if command -v sudo >/dev/null 2>&1; then
-              sudo apt-get update && sudo apt-get install -y --fix-missing ffmpeg
+              sudo apt-get update && sudo apt-get install -y --fix-missing ffmpeg python3
             else
-              apt-get update && apt-get install -y --fix-missing ffmpeg
+              apt-get update && apt-get install -y --fix-missing ffmpeg python3
             fi
-          else
-            echo "FFmpeg is already installed."
           fi
 
       - name: Create channel list
@@ -51,37 +49,37 @@ jobs:
           national-geographic|http://xlion.net:8080/live/15034094901029/18800196589372/15026.ts
           EOF
 
-      - name: Create HLS directories
-        run: |
-          mkdir -p hls
-          if [ -f channels.txt ]; then
-            while IFS='|' read -r NAME URL
-            do
-              mkdir -p "hls/$NAME"
-            done < channels.txt
-          fi
-
-      - name: Create master M3U
+      - name: Create directories and Master M3U
         run: |
           mkdir -p hls
           cat > hls/index.m3u <<'EOF'
           #EXTM3U
           EOF
 
-          if [ -f channels.txt ]; then
-            while IFS='|' read -r NAME URL
-            do
-              TITLE=$(echo "$NAME" | sed 's/-/ /g')
-
-              cat >> hls/index.m3u <<EOF
+          while IFS='|' read -r NAME URL
+          do
+            mkdir -p "hls/$NAME"
+            TITLE=$(echo "$NAME" | sed 's/-/ /g')
+            cat >> hls/index.m3u <<EOF
           #EXTINF:-1,$TITLE
           $NAME/index.m3u8
           EOF
-            done < channels.txt
-          fi
+          done < channels.txt
 
-      - name: Start HLS streams
+      - name: Upload Master M3U Immediately
+        uses: actions/upload-artifact@v4
+        with:
+          name: playlist-m3u
+          path: hls/index.m3u
+
+      - name: Start HTTP Server and HLS Streams
         run: |
+          # إيقاف أي سيرفر قديم يعمل على المنفذ 8888
+          fuser -k 8888/tcp || true
+
+          # تشغيل سيرفر ملفات لخدمة البث المباشر
+          python3 -m http.server 8888 --directory hls &
+
           while IFS='|' read -r NAME URL
           do
             echo "Starting $NAME"
@@ -115,16 +113,8 @@ jobs:
 
           done < channels.txt
 
-          echo "Streams started in background. Running for 5.5 hours..."
+          echo "Began streaming..."
           sleep 19800
 
-          echo "Stopping streams..."
           pkill -f ffmpeg || true
-
-      - name: Upload HLS files
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: hls-channels
-          path: hls/
-          retention-days: 7
+          pkill -f "http.server" || true
