@@ -16,14 +16,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install FFmpeg & Git
+      - name: Install FFmpeg, Git & rsync
         run: |
-          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v git >/dev/null 2>&1; then
+          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v rsync >/dev/null 2>&1; then
             export DEBIAN_FRONTEND=noninteractive
             if command -v sudo >/dev/null 2>&1; then
-              sudo apt-get update && sudo apt-get install -y --fix-missing ffmpeg git
+              sudo apt-get update && sudo apt-get install -y --fix-missing ffmpeg git rsync
             else
-              apt-get update && apt-get install -y --fix-missing ffmpeg git
+              apt-get update && apt-get install -y --fix-missing ffmpeg git rsync
             fi
           fi
 
@@ -55,9 +55,11 @@ jobs:
           national-geographic|http://xlion.net:8080/live/15034094901029/18800196589372/15026.ts
           EOF
 
-      - name: Create HLS structure & Master M3U
+      - name: Create HLS Structure & Master M3U
         run: |
           mkdir -p hls
+          BASE_URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+          
           cat > hls/index.m3u <<'EOF'
           #EXTM3U
           EOF
@@ -68,33 +70,47 @@ jobs:
             TITLE=$(echo "$NAME" | sed 's/-/ /g')
             cat >> hls/index.m3u <<EOF
           #EXTINF:-1,$TITLE
-          $NAME/index.m3u8
+          $BASE_URL/$NAME/index.m3u8
           EOF
           done < channels.txt
 
-      - name: Push Playlist to GitHub (gh-pages Branch)
+      - name: Start Continuous Sync and HLS Stream
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # إنشاء فرع gh-pages إذا لم يكن موجوداً ورفع ملف الماستر
-          git checkout --orphan gh-pages 2>/dev/null || git checkout gh-pages
-          git rm -rf . 2>/dev/null || true
-          
-          cp -r hls/* .
-          git add index.m3u
-          git commit -m "Update IPTV Playlist [skip ci]" || true
-          git push origin gh-pages --force
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          # تجهيز مجلد المزامنة لـ GitHub Pages
+          mkdir -p gh_deploy
+          cd gh_deploy
+          git init
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git checkout -b gh-pages 2>/dev/null || true
+          cd ..
+
+          # حلقة مزامنة الملفات ورفعها تلقائياً لـ GitHub كل 10 ثوانٍ
+          (
+            while true; do
+              sleep 10
+              if [ -d "hls" ]; then
+                rsync -a --delete hls/ gh_deploy/
+                cd gh_deploy
+                git add -A
+                if ! git diff --staged --quiet; then
+                  git commit -m "Auto sync live HLS segments [skip ci]"
+                  git push origin gh-pages --force >/dev/null 2>&1 || true
+                fi
+                cd ..
+              fi
+            done
+          ) &
 
           echo "======================================================="
-          echo "رابط القائمة المباشر من GitHub Raw:"
-          echo "https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/index.m3u"
+          echo "رابط قائمة القنوات الرئيسية الخاص بك:"
+          echo "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/index.m3u"
           echo "======================================================="
 
-      - name: Start HLS Streams
-        run: |
           while IFS='|' read -r NAME URL
           do
             echo "Starting $NAME"
@@ -116,7 +132,7 @@ jobs:
                   -c:a copy \
                   -f hls \
                   -hls_time 4 \
-                  -hls_list_size 6 \
+                  -hls_list_size 5 \
                   -hls_flags delete_segments+append_list+independent_segments \
                   -hls_segment_filename "hls/$NAME/segment_%06d.ts" \
                   "hls/$NAME/index.m3u8"
@@ -128,7 +144,7 @@ jobs:
 
           done < channels.txt
 
-          echo "Streaming in progress..."
+          echo "Streaming and pushing segments to GitHub Pages..."
           sleep 19800
 
           pkill -f ffmpeg || true
