@@ -5,19 +5,25 @@ on:
   schedule:
     - cron: "0 */6 * * *"
 
+permissions:
+  contents: write
+
 jobs:
   stream:
     runs-on: self-hosted
 
     steps:
-      - name: Install FFmpeg & Python
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install FFmpeg & Git
         run: |
-          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v git >/dev/null 2>&1; then
             export DEBIAN_FRONTEND=noninteractive
             if command -v sudo >/dev/null 2>&1; then
-              sudo apt-get update && sudo apt-get install -y --fix-missing ffmpeg python3
+              sudo apt-get update && sudo apt-get install -y --fix-missing ffmpeg git
             else
-              apt-get update && apt-get install -y --fix-missing ffmpeg python3
+              apt-get update && apt-get install -y --fix-missing ffmpeg git
             fi
           fi
 
@@ -49,7 +55,7 @@ jobs:
           national-geographic|http://xlion.net:8080/live/15034094901029/18800196589372/15026.ts
           EOF
 
-      - name: Create directories and Master M3U
+      - name: Create HLS structure & Master M3U
         run: |
           mkdir -p hls
           cat > hls/index.m3u <<'EOF'
@@ -66,20 +72,29 @@ jobs:
           EOF
           done < channels.txt
 
-      - name: Upload Master M3U Immediately
-        uses: actions/upload-artifact@v4
-        with:
-          name: playlist-m3u
-          path: hls/index.m3u
-
-      - name: Start HTTP Server and HLS Streams
+      - name: Push Playlist to GitHub (gh-pages Branch)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # إيقاف أي سيرفر قديم يعمل على المنفذ 8888
-          fuser -k 8888/tcp || true
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # إنشاء فرع gh-pages إذا لم يكن موجوداً ورفع ملف الماستر
+          git checkout --orphan gh-pages 2>/dev/null || git checkout gh-pages
+          git rm -rf . 2>/dev/null || true
+          
+          cp -r hls/* .
+          git add index.m3u
+          git commit -m "Update IPTV Playlist [skip ci]" || true
+          git push origin gh-pages --force
 
-          # تشغيل سيرفر ملفات لخدمة البث المباشر
-          python3 -m http.server 8888 --directory hls &
+          echo "======================================================="
+          echo "رابط القائمة المباشر من GitHub Raw:"
+          echo "https://raw.githubusercontent.com/${{ github.repository }}/gh-pages/index.m3u"
+          echo "======================================================="
 
+      - name: Start HLS Streams
+        run: |
           while IFS='|' read -r NAME URL
           do
             echo "Starting $NAME"
@@ -113,8 +128,7 @@ jobs:
 
           done < channels.txt
 
-          echo "Began streaming..."
+          echo "Streaming in progress..."
           sleep 19800
 
           pkill -f ffmpeg || true
-          pkill -f "http.server" || true
