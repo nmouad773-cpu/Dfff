@@ -16,16 +16,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install FFmpeg, Git & rsync
+      - name: Fix APT Permissions & Install Packages
         run: |
-          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v rsync >/dev/null 2>&1; then
-            export DEBIAN_FRONTEND=noninteractive
-            if command -v sudo >/dev/null 2>&1; then
-              sudo apt-get update && sudo apt-get install -y --fix-missing ffmpeg git rsync
-            else
-              apt-get update && apt-get install -y --fix-missing ffmpeg git rsync
-            fi
-          fi
+          export DEBIAN_FRONTEND=noninteractive
+          
+          # تنظيف ملفات القفل واللوجات المسببة للخطأ
+          sudo rm -f /var/log/apt/eipp.log.xz || true
+          sudo rm -f /var/lib/dpkg/lock* || true
+          sudo rm -f /var/lib/apt/lists/lock || true
+          
+          # إصلاح الحزم المعلقة في dpkg
+          sudo dpkg --configure -a || true
+          
+          # تحديث وتثبيت الأدوات بشكل نظيف
+          sudo apt-get clean
+          sudo apt-get update -y
+          sudo apt-get install -y --fix-broken --fix-missing ffmpeg git rsync
 
       - name: Create channel list
         run: |
@@ -81,7 +87,6 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-          # تجهيز مجلد المزامنة لـ GitHub Pages
           mkdir -p gh_deploy
           cd gh_deploy
           git init
@@ -89,7 +94,6 @@ jobs:
           git checkout -b gh-pages 2>/dev/null || true
           cd ..
 
-          # حلقة مزامنة الملفات ورفعها تلقائياً لـ GitHub كل 10 ثوانٍ
           (
             while true; do
               sleep 10
@@ -105,11 +109,6 @@ jobs:
               fi
             done
           ) &
-
-          echo "======================================================="
-          echo "رابط قائمة القنوات الرئيسية الخاص بك:"
-          echo "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/index.m3u"
-          echo "======================================================="
 
           while IFS='|' read -r NAME URL
           do
@@ -144,7 +143,7 @@ jobs:
 
           done < channels.txt
 
-          echo "Streaming and pushing segments to GitHub Pages..."
+          echo "Streaming..."
           sleep 19800
 
           pkill -f ffmpeg || true
