@@ -20,18 +20,23 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           
-          # تنظيف ملفات القفل واللوجات المسببة للخطأ
-          sudo rm -f /var/log/apt/eipp.log.xz || true
-          sudo rm -f /var/lib/dpkg/lock* || true
-          sudo rm -f /var/lib/apt/lists/lock || true
+          # التحقق من وجود sudo أو التشغيل كـ root مباشرة
+          if command -v sudo >/dev/null 2>&1; then
+            SUDO="sudo"
+          else
+            SUDO=""
+          fi
           
-          # إصلاح الحزم المعلقة في dpkg
-          sudo dpkg --configure -a || true
+          # تنظيف ملفات القفل والقوائم المعلقة
+          $SUDO rm -f /var/log/apt/eipp.log.xz || true
+          $SUDO rm -f /var/lib/dpkg/lock* || true
+          $SUDO rm -f /var/lib/apt/lists/lock || true
           
-          # تحديث وتثبيت الأدوات بشكل نظيف
-          sudo apt-get clean
-          sudo apt-get update -y
-          sudo apt-get install -y --fix-broken --fix-missing ffmpeg git rsync
+          # إصلاح حزم dpkg والتثبيت
+          $SUDO dpkg --configure -a || true
+          $SUDO apt-get clean
+          $SUDO apt-get update -y
+          $SUDO apt-get install -y --fix-broken --fix-missing ffmpeg git rsync
 
       - name: Create channel list
         run: |
